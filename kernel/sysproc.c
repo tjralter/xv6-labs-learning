@@ -95,3 +95,15 @@ sys_uptime(void)
   release(&tickslock);
   return xticks;
 }
+
+uint64
+sys_trace(void)
+{
+  int mask;
+
+  if(argint(0,&mask)<0) //从a0寄存器中获取参数并赋值给mask
+    return -1;
+  
+  myproc()->tmask=mask; //将mask存到proc结构体中的tmask
+  return 0;
+}
