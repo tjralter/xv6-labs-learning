@@ -68,15 +68,43 @@ kfree(void *pa)
 void *
 kalloc(void)
 {
+  //先定义一个指针
   struct run *r;
 
+  //锁住内存
   acquire(&kmem.lock);
+  //指针指向表头
   r = kmem.freelist;
+  //还有空闲内存就将表头指向下一个内存块
   if(r)
     kmem.freelist = r->next;
+  //解锁内存
   release(&kmem.lock);
 
+  //把新申请的空间的数据全部设置为5
   if(r)
     memset((char*)r, 5, PGSIZE); // fill with junk
   return (void*)r;
+}
+
+uint64
+count_freemem(void)
+{
+  //锁内存管理结构，防止统计时有进程访问free-list
+  acquire(&kmem.lock);
+  //统计空闲页数，乘上页大小PGSIZE，就是空闲字节数
+  uint64 mem_bytes=0;
+  //xv6中，空闲内存页的记录方式是将空闲内存页本身作为链表的节点，形成一个空闲页链表
+  struct run *r=kmem.freelist;
+  //遍历free-list
+  while (r)
+  {
+    mem_bytes+=PGSIZE;
+    r=r->next;
+  }
+  //解锁
+  release(&kmem.lock);
+
+  return mem_bytes;
+  
 }

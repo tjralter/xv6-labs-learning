@@ -6,6 +6,7 @@
 #include "memlayout.h"
 #include "spinlock.h"
 #include "proc.h"
+#include "sysinfo.h"
 
 uint64
 sys_exit(void)
@@ -105,5 +106,26 @@ sys_trace(void)
     return -1;
   
   myproc()->tmask=mask; //将mask存到proc结构体中的tmask
+  return 0;
+}
+
+uint64
+sys_sysinfo(void)
+{
+  uint64 addr;
+  argaddr(0,&addr); // 获取当前进程下的页表下的trapframe的寄存器a0的虚拟地址
+
+  struct sysinfo sinfo;
+
+  // 根据计算好的数据把sinfo配置好
+  sinfo.freemem=count_freemem();  //kernel/kalloc.c
+  sinfo.nproc=count_liveproc(); //kernel/proc.c
+
+  //使用copyout，结合当前进程的页表，获得进程传进来的指针（逻辑地址）对应的物理地址
+  //然后将&sinfo中的数据复制到该指针所指位置，供用户进程使用
+  if(copyout(myproc()->pagetable,addr,(char*)&sinfo,sizeof(sinfo))<0)
+  {
+    return -1;
+  }
   return 0;
 }
