@@ -81,7 +81,20 @@ int
 sys_pgaccess(void)
 {
   // lab pgtbl: your code here.
-  return 0;
+  uint64 base;//页面范围的起始地址
+  int num;//页面个数
+  uint64 mask;//一个用户的内存缓冲，用于存储指定页面范围的最近访问情况。
+  
+  if(argaddr(0, &base) < 0)
+    return -1;
+  if(argint(1, &num) < 0)
+    return -1;
+  if(argaddr(2, &mask) < 0)
+    return -1;
+  if(num < 0 || num > 32)
+    return -1;
+
+  return pgaccess((void*)base, num, (void*)mask);
 }
 #endif
 
