@@ -304,11 +304,43 @@ sys_open(void)
       return -1;
     }
   } else {
-    if((ip = namei(path)) == 0){
-      end_op();
-      return -1;
+
+    int symlink_depth = 0;  //用于记录嵌套的深度
+    while(1){//递归地跟随符号链接
+      //在每次循环迭代中，调用 namei 函数获取路径对应的索引节点 ip。
+        if((ip = namei(path)) == 0){
+        end_op();
+        return -1;
+      }
+      //调用 ilock 锁定索引节点
+      ilock(ip);
+
+      //检查其类型是否为符号链接（T_SYMLINK），以及打开模式是否包含 O_NOFOLLOW 标志
+      if(ip->type == T_SYMLINK && (omode & O_NOFOLLOW) == 0){
+          //检查符号链接的深度
+          if(++symlink_depth > 10){
+            //如果深度超过 10 层，可能存在循环引用，
+            //解锁并释放索引节点 ip，然后调用 end_op 结束文件系统操作并返回 -1
+            iunlockput(ip);
+            end_op();
+            return -1;
+          }
+          //读取符号链接的内容，并将其写入到 path 数组中
+          if(readi(ip, 0, (uint64)path, 0, MAXPATH) < 0){
+            //若读取失败，解锁并释放索引节点 ip，然后调用 end_op 结束文件系统操作并返回 -1
+            iunlockput(ip);
+            end_op();
+            return -1;
+          }
+          iunlockput(ip);
+      }else{
+        //如果索引节点的类型不是符号链接，表示找到了目标节点，跳出循环
+        break;
+      }
+
     }
-    ilock(ip);
+
+    
     if(ip->type == T_DIR && omode != O_RDONLY){
       iunlockput(ip);
       end_op();
@@ -482,5 +514,44 @@ sys_pipe(void)
     fileclose(wf);
     return -1;
   }
+  return 0;
+}
+
+uint64 
+sys_symlink(void)
+{
+  struct inode *ip;
+  char target[MAXPATH], path[MAXPATH];
+
+  // 通过argstr函数获取函数调用的参数
+  // 该函数将第0个参数的值存储在target数组中，最大长度为MAXPATH
+  // 类似地，将第1个参数的值存储在path数组中，最大长度为MAXPATH
+  if(argstr(0, target, MAXPATH) < 0 || argstr(1, path, MAXPATH) < 0)
+    return -1;
+
+  // 开始文件系统操作
+  begin_op();
+
+  // 调用create函数创建一个类型为T_SYMLINK的inode，并将其赋值给ip
+  // 如果创建失败，则释放资源并返回-1
+  ip = create(path, T_SYMLINK, 0, 0);
+  if(ip == 0){
+    end_op();
+    return -1;
+  }
+
+  // 将目标路径target存储在inode的第一个数据块中
+  // writei函数用于写入inode的数据，它将目标路径target的地址转换为uint64类型
+  // 如果写入失败，则释放资源并返回-1
+  if(writei(ip, 0, (uint64)target, 0, strlen(target)) < 0) {
+    end_op();
+    return -1;
+  }
+
+  // 解锁inode，并将其释放
+  iunlockput(ip);
+
+  // 结束文件系统操作
+  end_op();
   return 0;
 }

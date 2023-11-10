@@ -400,6 +400,32 @@ bmap(struct inode *ip, uint bn)
     brelse(bp);
     return addr;
   }
+  bn -= NINDIRECT;
+
+  //二级间接索引
+  if(bn < NINDIRECT * NINDIRECT){
+    // 获取二级间接块的地址
+    if((addr = ip->addrs[NDIRECT+1]) == 0)  //inode的最后一个块，用来指向二级间接块
+      ip->addrs[NDIRECT+1] = addr = balloc(ip->dev);
+    bp = bread(ip->dev, addr);
+    a = (uint*)bp->data;
+    //获取一级间接块的地址
+    if((addr = a[bn/NINDIRECT]) == 0){    //二级间接块的每个条目指向一个一级间接块
+      a[bn/NINDIRECT] = addr = balloc(ip->dev);
+      log_write(bp);
+    }
+    brelse(bp);
+    bn %= NINDIRECT;
+    bp = bread(ip->dev, addr);
+    a = (uint*)bp->data;
+    //获取直接数据块的地址
+    if((addr = a[bn]) == 0){
+      a[bn] = addr = balloc(ip->dev);
+      log_write(bp);
+    }
+    brelse(bp);
+    return addr;
+  }
 
   panic("bmap: out of range");
 }
@@ -410,9 +436,11 @@ void
 itrunc(struct inode *ip)
 {
   int i, j;
-  struct buf *bp;
-  uint *a;
+  //新增*bp2，*a2用于释放二级间接块的操作
+  struct buf *bp, *bp2;
+  uint *a, *a2;
 
+  //释放直接数据块
   for(i = 0; i < NDIRECT; i++){
     if(ip->addrs[i]){
       bfree(ip->dev, ip->addrs[i]);
@@ -420,6 +448,7 @@ itrunc(struct inode *ip)
     }
   }
 
+  //释放一级间接块
   if(ip->addrs[NDIRECT]){
     bp = bread(ip->dev, ip->addrs[NDIRECT]);
     a = (uint*)bp->data;
@@ -430,6 +459,27 @@ itrunc(struct inode *ip)
     brelse(bp);
     bfree(ip->dev, ip->addrs[NDIRECT]);
     ip->addrs[NDIRECT] = 0;
+  }
+
+  //释放二级间接块
+  if(ip->addrs[NDIRECT+1]){
+    bp = bread(ip->dev, ip->addrs[NDIRECT + 1]);
+    a = (uint*)bp->data;
+    for(j = 0; j < NINDIRECT; j++){//遍历二级间接块中所有条目，即一级间接块
+      if(a[j]){
+        bp2 = bread(ip->dev, a[j]);
+        a2 = (uint*)bp2->data;
+        for(int k = 0; k < NINDIRECT; k++){//遍历一级间接块中所有条目，即直接数据块
+          if(a2[k])
+            bfree(ip->dev, a2[k]);
+        }
+        brelse(bp2);
+        bfree(ip->dev, a[j]);
+      }
+    }
+    brelse(bp);
+    bfree(ip->dev, ip->addrs[NDIRECT + 1]);
+    ip->addrs[NDIRECT + 1] = 0;
   }
 
   ip->size = 0;
