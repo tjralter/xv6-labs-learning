@@ -95,9 +95,44 @@ e1000_init(uint32 *xregs)
 int
 e1000_transmit(struct mbuf *m)
 {
-  //
-  // Your code here.
-  //
+  //获取E1000的锁，防止多进程同时发送数据race
+  acquire(&e1000_lock);
+
+  //查询ring里下一个packet的下标
+  int idx = regs[E1000_TDT];
+
+  //获取buffer的描述符，其中存储了关于该buffer的各种信息
+  struct tx_desc *desc = &tx_ring[idx];
+  
+  //如果读buffer中的数据还未传输完，则表明该“发送环”没有空的位置来存放新 mbuf（也即溢出，返回错误
+  if((desc->status & E1000_TXD_STAT_DD) == 0){
+    //之前的传输还没有完成
+    //释放锁
+    release(&e1000_lock);
+    return -1;
+  }
+
+  //如果该下标仍有之前发送完毕但未释放的mbuf，则释放
+  if(tx_mbufs[idx]){
+    mbuffree(tx_mbufs[idx]);
+  }
+
+  //将要发送的mbuf的内存地址与长度填写到发送描述符中
+  desc->addr = (uint64)m->head;
+  desc->length = m->len;
+  //设置参数，EOP表示该buffer含有一个完整的packet
+  //RS告诉网卡在发送完成后，设置status中的E1000_TXD_STAT_DD位，表示发送完成
+  desc->cmd = E1000_TXD_CMD_EOP | E1000_TXD_CMD_RS;
+  
+  //保留到新mbuf的指针，方便后续再次用到同一下标时释放
+  tx_mbufs[idx] = m;
+
+  //发送环内下标增加1
+  regs[E1000_TDT] = (regs[E1000_TDT]+1) % TX_RING_SIZE;
+
+  release(&e1000_lock);
+
+
   // the mbuf contains an ethernet frame; program it into
   // the TX descriptor ring so that the e1000 sends it. Stash
   // a pointer so that it can be freed after sending.
@@ -115,6 +150,38 @@ e1000_recv(void)
   // Check for packets that have arrived from the e1000
   // Create and deliver an mbuf for each packet (using net_rx()).
   //
+
+  //获取“接收环”中下一个要被“接收处理”的 rx_desc 结构体的位置idx
+  int idx = (regs[E1000_RDT] + 1) % RX_RING_SIZE;
+
+  //查询rx_desc的 E1000_RXD_STAT_DD 状态位来判断其是否为一个真正待“接收处理”的 rx_desc 结构体
+  if ((rx_ring[idx].status & E1000_RXD_STAT_DD) == 0) {
+    return;
+  }
+
+  //如果idx指向的是一个待处理的rx_desc则开启一个循环
+  while (1)
+  {
+    rx_mbufs[idx]->len = rx_ring[idx].length;
+    //传递给上层网络栈，上层负责释放mbuf
+    net_rx(rx_mbufs[idx]);
+
+    //分配并设置新的mbuf，供给下一次轮到该下标时使用
+    rx_mbufs[idx] = mbufalloc(0);
+    rx_ring[idx].addr = (uint64)rx_mbufs[idx]->head;
+    //要将该rx_desc结构体的status成员变量状态位置0
+    rx_ring[idx].status = 0;
+
+    regs[E1000_RDT]=idx;
+
+    //更新idx
+    idx = (regs[E1000_RDT] + 1) % RX_RING_SIZE;
+    // 没有新包了,return
+    if ((rx_ring[idx].status & E1000_RXD_STAT_DD) == 0) {
+      return;
+    }
+  }
+
 }
 
 void
